@@ -28,7 +28,7 @@ class FSMState {
 public:
 	FSMState(std::shared_ptr<Character> _character);
 	virtual void onEnter(const GameState& gs); //Se llama al entrar al estado
-	virtual Move onUpdate(const GameState& gs)=0; //se llama cada frame meintras me encuentro en el estado
+	virtual Move onUpdate(const GameState& gs)=0; //se llama cada frame mientras me encuentro en el estado
 	virtual void onExit(const GameState& gs); //se llama al salir del estado
 	virtual ~FSMState();
 	void addTransition(std::shared_ptr<FSMTransition> t);
