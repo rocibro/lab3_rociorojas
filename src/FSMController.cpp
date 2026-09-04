@@ -12,7 +12,7 @@ FSMController::FSMController(std::shared_ptr<Character> character):
 	Controller(character),
 	e(rand()),
 	uniform_dist(0,3),
-	fsm(std::make_shared<ExampleStateMachine>(character)) {
+	fsm(std::make_shared<GhostStateMachine>(character)) {
 }
 
 FSMController::~FSMController() {
@@ -51,6 +51,7 @@ ChaseState::ChaseState(std::shared_ptr<Character> _character):FSMState(_characte
 void ChaseState::onEnter(const GameState& ){
 	std::dynamic_pointer_cast<Ghost>(character)->revert();
 }
+
 Move ChaseState::onUpdate(const GameState& game){
 	std::vector<Move> moves;
 	const auto pacmanCoord=game.getMaze().getNodePos(game.getPacmanPos());
@@ -82,18 +83,159 @@ ChaseState::~ChaseState(){
 
 }
 
+ScatterState::ScatterState(std::shared_ptr<Character> _character): FSMState(_character){}
 
+void ScatterState::onEnter(const GameState& ){
+	std::dynamic_pointer_cast<Ghost>(character)->revert();
+}
+Move ScatterState:: onUpdate(const GameState& game){
+	int myPos = character->getPos();
+
+	//punto de fuga
+	std::pair<int,int> cornerTarget = std::make_pair(0,0); 
+
+	std::vector<Move> moves = game.getMaze().getGhostLegalMoves(myPos, character->getDirection());
+
+	int minDist = 10000000;
+	Move minMove = moves[0];
+
+	for (Move m : moves){
+		int vecino = game.getMaze().getNeighbour(myPos, m);
+		if (vecino < 0) continue;
+
+		auto vecinoCoords = game.getMaze().getNodePos(vecino);
+		int dx = vecinoCoords.first - cornerTarget.first;
+		int dy = vecinoCoords.second - cornerTarget.second;
+
+		int dist = dx*dx + dy*dy;
+
+		if (dist < minDist){
+			minDist = dist;
+			minMove = m;
+		}
+	}
+	return minMove;
+}
+
+ScatterState::~ScatterState(){}
+
+NonFrightenedState::NonFrightenedState(std::shared_ptr<Character> _character): FSMState(_character){
+	chaseState = std::make_shared<ChaseState>(_character);
+	scatterState = std::make_shared<ScatterState>(_character);
+	activeChild = scatterState; //pacman clásico arranca en Scatter
+}
+
+void NonFrightenedState::onEnter(const GameState& gs){
+	lastSwitch = std::chrono::system_clock::now();
+	activeChild = scatterState;
+	activeChild->onEnter(gs);
+	started = true;
+}
+
+Move NonFrightenedState::onUpdate(const GameState& gs){
+	if (!started){
+		lastSwitch = std::chrono::system_clock::now();
+		started = true;
+	}
+	
+	auto now = std::chrono::system_clock::now();
+	std::chrono::duration<double> elapsed = now - lastSwitch;
+
+	if(activeChild == scatterState && elapsed.count() > scatter_seconds){
+		activeChild->onExit(gs);
+		activeChild = chaseState;
+		activeChild->onEnter(gs);
+		lastSwitch = now;
+	}
+	else if(activeChild == chaseState && elapsed.count() > chase_seconds){
+		activeChild->onExit(gs);
+		activeChild = scatterState;
+		activeChild->onEnter(gs);
+		lastSwitch = now;
+	}
+
+	return activeChild->onUpdate(gs);
+}
+
+void NonFrightenedState::onExit(const GameState& gs){
+	activeChild->onExit(gs);
+}
+
+NonFrightenedState::~NonFrightenedState(){}
+
+
+FrightenedState::FrightenedState(std::shared_ptr<Character> _character):FSMState(_character){}
+
+void FrightenedState::onEnter(const GameState&){
+	std::dynamic_pointer_cast<Ghost>(character)->revert();
+}
+
+Move FrightenedState::onUpdate(const GameState& game){
+	int myPos = character->getPos();
+	auto pacmanCoords = game.getMaze().getNodePos(game.getPacmanPos());
+
+	std::vector<Move> moves = game.getMaze().getGhostLegalMoves(myPos, character->getDirection());
+
+	int maxDist = -1;
+	Move maxMove = moves[0];
+
+	for (Move m : moves){
+		int vecino = game.getMaze().getNeighbour(myPos, m);
+		if (vecino < 0) continue;
+		auto vecinoCoords = game.getMaze().getNodePos(vecino);
+		int dx = vecinoCoords.first - pacmanCoords.first;
+		int dy = vecinoCoords.second - pacmanCoords.second;
+		int dist = dx*dx + dy*dy;
+
+		if(dist > maxDist){
+			maxDist = dist;
+			maxMove = m;
+		}
+	}
+
+	return maxMove;
+}
+
+FrightenedState::~FrightenedState(){}
+
+EdibleTransition::EdibleTransition(std::shared_ptr<Character> _character, std::shared_ptr<FSMState> _next): character(_character), next(_next){}
+
+bool EdibleTransition::isValid(const GameState&){
+	return std::dynamic_pointer_cast<Ghost>(character)->isEdible();
+}
+
+std::shared_ptr<FSMState> EdibleTransition::getNextState(){
+	return next;
+}
+
+NotEdibleTransition::NotEdibleTransition(std::shared_ptr<Character> _character, std::shared_ptr<FSMState> _next): character(_character), next(_next){}
+
+bool NotEdibleTransition::isValid(const GameState&){
+	return !std::dynamic_pointer_cast<Ghost>(character)->isEdible();
+}
+
+std::shared_ptr<FSMState> NotEdibleTransition::getNextState(){
+	return next;
+}
 /////////////////////////////////////BlinkyStateMachine/////////////////////////////
-ExampleStateMachine::ExampleStateMachine(std::shared_ptr<Character> _character):FiniteStateMachine(_character){
-	initialState = std::make_shared<ChaseState>(character);
-	activeState=initialState;
-	states.push_back(initialState);
-	activeState->addTransition(std::make_shared<PillTransition>(activeState)); // Arreglar
+GhostStateMachine::GhostStateMachine(std::shared_ptr<Character> _character):FiniteStateMachine(_character){
+	auto nonFrightened = std::make_shared<NonFrightenedState>(_character);
+	auto frightened = std::make_shared<FrightenedState>(_character);
+
+	nonFrightened->addTransition(std::make_shared<EdibleTransition>(_character, frightened));
+	frightened->addTransition(std::make_shared<NotEdibleTransition>(_character, nonFrightened));
+
+	states.push_back(nonFrightened);
+	states.push_back(frightened);
+
+	initialState = nonFrightened;
+	activeState = initialState;
+	//activeState->onEnter(*(GameState*)nullptr);
 }
 
 
 
-Move ExampleStateMachine::update(const GameState& gs){
+Move GhostStateMachine::update(const GameState& gs){
 	auto t=activeState->getActiveTransition(gs);
 	if(t!=nullptr){
 		activeState->onExit(gs);
@@ -105,7 +247,7 @@ Move ExampleStateMachine::update(const GameState& gs){
 }
 
 
-ExampleStateMachine::~ExampleStateMachine(){
+GhostStateMachine::~GhostStateMachine(){
 
 }
 

@@ -11,13 +11,14 @@
 #include "Controller.h"
 #include <random>
 #include "FSM.h"
+#include <chrono>
 
-class ExampleStateMachine;
+class GhostStateMachine;
 
 class FSMController: public Controller {
 	std::mt19937 e;
 	std::uniform_int_distribution<int> uniform_dist;
-	std::shared_ptr<ExampleStateMachine> fsm;
+	std::shared_ptr<GhostStateMachine> fsm;
 public:
 	FSMController(std::shared_ptr<Character> character);
 	virtual ~FSMController();
@@ -43,12 +44,66 @@ public:
 
 };
 
-class ExampleStateMachine: public FiniteStateMachine{
+class ScatterState: public FSMState{
+public:
+	ScatterState(std::shared_ptr<Character> _character);
+	void onEnter(const GameState&gs) override;
+	Move onUpdate(const GameState& gs) override;
+	~ScatterState();
+};
+
+class NonFrightenedState: public FSMState{
+	std::shared_ptr<FSMState> chaseState;
+	std::shared_ptr<FSMState> scatterState;
+	std::shared_ptr<FSMState> activeChild; //cual de los dos está activo ahora
+
+	std::chrono::system_clock::time_point lastSwitch; //cuando cambiamos por última vez
+	bool started;
+
+	static const int scatter_seconds = 7;
+	static const int chase_seconds = 20;
 
 public:
-	ExampleStateMachine(std::shared_ptr<Character> _character);
+	NonFrightenedState(std::shared_ptr<Character> _character);
+	void onEnter(const GameState& gs) override;
+	Move onUpdate(const GameState& gs) override;
+	void onExit(const GameState& gs) override;
+	~NonFrightenedState();
+};
+
+class FrightenedState: public FSMState{
+public:
+	FrightenedState(std::shared_ptr<Character> _character);
+	void onEnter(const GameState& gs) override;
+	Move onUpdate(const GameState& gs) override;
+	~FrightenedState();
+};
+
+class EdibleTransition: public FSMTransition{
+	std::shared_ptr<Character> character;
+	std::shared_ptr<FSMState> next;
+
+public:
+	EdibleTransition(std::shared_ptr<Character> _character, std::shared_ptr<FSMState> _next);
+	bool isValid(const GameState& gs) override;
+	std::shared_ptr<FSMState> getNextState() override;
+};
+
+class NotEdibleTransition: public FSMTransition{
+	std::shared_ptr<Character> character;
+	std::shared_ptr<FSMState> next;
+public:
+	NotEdibleTransition(std::shared_ptr<Character> _character, std::shared_ptr<FSMState> _next);
+	bool isValid(const GameState& gs) override;
+	std::shared_ptr<FSMState> getNextState() override;
+
+};
+class GhostStateMachine: public FiniteStateMachine{
+
+public:
+	GhostStateMachine(std::shared_ptr<Character> _character);
 	Move update(const GameState& gs) override;
-	~ExampleStateMachine();
+	~GhostStateMachine();
 
 };
 #endif /* FSMCONTROLLER_H_ */
